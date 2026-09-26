@@ -18,7 +18,7 @@ https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray
 
 let urls = [];
 let subConverter = "api.asailor.org"; //订阅转换后端，可用环境变量 SUBAPI 覆盖
-let subConfig = "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_MultiMode.ini"; //分流模板，可用环境变量 SUBCONFIG 覆盖
+let subConfig = "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_MultiCountry.ini"; //分流模板，官方仓库每日更新，可用环境变量 SUBCONFIG 覆盖
 let subProtocol = 'https';
 
 export default {
@@ -182,7 +182,16 @@ export default {
 			} else if (订阅格式 == 'clash') {
 				subConverterUrl = `${subProtocol}://${subConverter}/sub?target=clash&url=${encodeURIComponent(订阅转换URL)}&insert=false&config=${encodeURIComponent(subConfig)}&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
 			} else if (订阅格式 == 'singbox') {
-				subConverterUrl = `${subProtocol}://${subConverter}/sub?target=singbox&url=${encodeURIComponent(订阅转换URL)}&insert=false&config=${encodeURIComponent(subConfig)}&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
+				let singboxSource = 订阅转换URL;
+				const directNodes = result.split('\n').map(item => item.trim()).filter(item => item && !item.toLowerCase().startsWith('http'));
+				if (directNodes.length) {
+					const joined = directNodes.join('|');
+					if (joined.length < 16000) {
+						const extra = 订阅转换URL.includes('|') ? 订阅转换URL.slice(订阅转换URL.indexOf('|') + 1) : '';
+						singboxSource = extra ? `${joined}|${extra}` : joined;
+					}
+				}
+				subConverterUrl = `${subProtocol}://${subConverter}/sub?target=singbox&url=${encodeURIComponent(singboxSource)}&insert=false&config=${encodeURIComponent(subConfig)}&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
 			} else if (订阅格式 == 'surge') {
 				subConverterUrl = `${subProtocol}://${subConverter}/sub?target=surge&ver=4&url=${encodeURIComponent(订阅转换URL)}&insert=false&config=${encodeURIComponent(subConfig)}&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
 			} else if (订阅格式 == 'quanx') {
@@ -200,8 +209,14 @@ export default {
 					return new Response('订阅转换失败', { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } });
 				}
 				let subConverterContent = await subConverterResponse.text();
-				if (订阅格式 == 'clash') subConverterContent = clashFix(subConverterContent, result);
-				else if (订阅格式 == 'singbox') subConverterContent = singboxFix(subConverterContent, result);
+				if (订阅格式 == 'clash') {
+					const listUrl = subConverterUrl.replace('list=false', 'list=true').replace(/&config=[^&]*/, '');
+					try {
+						const listResponse = await fetch(listUrl, { headers: { 'User-Agent': 'clash.meta/1.19.0' } });
+						if (listResponse.ok) subConverterContent = inlineClashNodes(subConverterContent, await listResponse.text());
+					} catch (e) {}
+					subConverterContent = clashFix(subConverterContent, result);
+				} else if (订阅格式 == 'singbox') subConverterContent = singboxFix(subConverterContent, result);
 				return new Response(subConverterContent, {
 					headers: {
 						"Content-Disposition": `attachment; filename*=utf-8''${encodeURIComponent(FileName)}`,
@@ -305,6 +320,101 @@ async function MD5MD5(text) {
 }
 
 
+
+
+function inlineClashNodes(full, listText) {
+	if (!full.includes('proxy-providers:')) return full;
+	const items = [];
+	const names = [];
+	for (const line of String(listText || '').split('\n')) {
+		const trim = line.trim();
+		if (!trim.startsWith('-')) continue;
+		items.push('  ' + trim);
+		const matched = trim.match(/name:\s*([^,]+)/);
+		if (!matched) continue;
+		let name = matched[1].trim();
+		if ((name.startsWith('"') && name.endsWith('"')) || (name.startsWith("'") && name.endsWith("'"))) name = name.slice(1, -1);
+		names.push(name);
+	}
+	if (!items.length) return full;
+	const kept = [];
+	let skip = false;
+	for (const line of full.split('\n')) {
+		if (!skip && line.startsWith('proxy-providers:')) {
+			skip = true;
+			continue;
+		}
+		if (skip) {
+			if (line && !/^\s/.test(line)) skip = false;
+			else continue;
+		}
+		kept.push(line);
+	}
+	let text = kept.join('\n');
+	const block = 'proxies:\n' + items.join('\n') + '\n';
+	if (text.includes('\nproxy-groups:')) text = text.replace('\nproxy-groups:', '\n' + block + 'proxy-groups:');
+	else text = block + text;
+	const lines = text.split('\n');
+	const out = [];
+	let group = null;
+	const flush = () => {
+		if (!group) return;
+		const body = group.join('\n');
+		const usesProvider = /^\s+use:\s*$/m.test(body) && /Provider_/.test(body);
+		if (!usesProvider) {
+			out.push(...group);
+			group = null;
+			return;
+		}
+		let filter = null;
+		const filterLine = body.match(/^\s+filter:\s*(.+)$/m);
+		if (filterLine) {
+			try { filter = new RegExp(filterLine[1].trim()); } catch (e) { filter = null; }
+		}
+		const picked = names.filter(name => !filter || filter.test(name));
+		const keptGroup = [];
+		let skippingUse = false;
+		for (const line of group) {
+			if (/^\s+use:\s*$/.test(line)) {
+				skippingUse = true;
+				continue;
+			}
+			if (skippingUse) {
+				if (/^\s+- /.test(line)) continue;
+				skippingUse = false;
+			}
+			if (/^\s+filter:/.test(line)) continue;
+			keptGroup.push(line);
+		}
+		const nameLines = picked.length ? picked.map(name => '      - ' + yamlScalar(name)) : ['      - DIRECT'];
+		const index = keptGroup.findIndex(line => /^\s+proxies:\s*$/.test(line));
+		if (index >= 0) keptGroup.splice(index + 1, 0, ...nameLines);
+		else keptGroup.push('    proxies:', ...nameLines);
+		out.push(...keptGroup);
+		group = null;
+	};
+	for (const line of lines) {
+		if (line.startsWith('proxy-groups:')) {
+			flush();
+			out.push(line);
+			continue;
+		}
+		if (/^ {2}- name:/.test(line)) {
+			flush();
+			group = [line];
+			continue;
+		}
+		if (group && line && !/^\s/.test(line)) {
+			flush();
+			out.push(line);
+			continue;
+		}
+		if (group) group.push(line);
+		else out.push(line);
+	}
+	flush();
+	return out.join('\n');
+}
 
 function queryMap(search) {
 	const out = {};
