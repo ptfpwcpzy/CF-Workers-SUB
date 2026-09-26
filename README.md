@@ -25,4 +25,4 @@
 | SUBCONFIG | 分流模板地址 |
 | SUBNAME | 客户端里显示的订阅名 |
 
-Clash、sing-box 的完整配置仍由 `SUBAPI` 生成。转换时节点会经过该后端。
+Clash、sing-box 的完整配置由 `SUBAPI` 生成。默认是仍在更新的 `api.asailor.org`。转换时节点会经过该后端；要避免经过别人的服务器，把 `SUBAPI` 改成你自己部署的地址。
