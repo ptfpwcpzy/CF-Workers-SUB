@@ -710,9 +710,25 @@ function singboxFix(content, raw) {
 }
 
 function clashFix(content, raw) {
-	for (const field of ['down', 'up', 'obfs', 'obfs-password', 'fingerprint']) {
-		content = content.replaceAll(`, ${field}: ""`, '').replaceAll(`, ${field}: ''`, '');
-	}
+	content = content.split('\n').map(line => {
+		if (!line.includes('obfs') && !line.includes('down:') && !line.includes('up:') && !line.includes('fingerprint:') && !line.includes('short-id:')) return line;
+		let next = line;
+		for (const field of ['down', 'up', 'fingerprint']) {
+			next = next.replaceAll(`, ${field}: ""`, '').replaceAll(`, ${field}: ''`, '');
+		}
+		next = next.replace(/, short-id:\s*(""|'')/g, '');
+		const obfs = next.match(/,\s*obfs:\s*([^,}\n]+)/);
+		const pass = next.match(/,\s*obfs-password:\s*([^,}\n]+)/);
+		const clean = (value) => (value || '').trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+		const obfsVal = obfs ? clean(obfs[1]) : '';
+		const passVal = pass ? clean(pass[1]) : '';
+		const badObfs = !obfs || !obfsVal || ['none', 'null', 'off', 'false'].includes(obfsVal);
+		const badPass = !pass || !passVal || ['none', 'null', 'off', 'false'].includes(passVal);
+		if (obfs && (badObfs || badPass)) {
+			next = next.replace(/,\s*obfs:\s*[^,}\n]+/g, '').replace(/,\s*obfs-password:\s*[^,}\n]+/g, '');
+		}
+		return next;
+	}).join('\n');
 	if (content.includes('wireguard') && !content.includes('remote-dns-resolve')) {
 		let lines;
 		if (content.includes('\r\n')) {
