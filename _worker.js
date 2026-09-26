@@ -6,7 +6,7 @@ let guestToken = ''; //可以随便取，或者uuid生成，https://1024tools.co
 let BotToken = ''; //可以为空，或者@BotFather中输入/start，/newbot，并关注机器人
 let ChatID = ''; //可以为空，或者@userinfobot中获取，/start
 let TG = 0; //小白勿动， 开发者专用，1 为推送所有的访问信息，0 为不推送订阅转换后端的访问信息与异常访问
-let FileName = 'CF-Workers-SUB';
+let FileName = '那么羡慕你';
 let SUBUpdateTime = 6; //自定义订阅更新时间，单位小时
 let total = 99;//TB
 let timestamp = 4102329600000;//2099-12-31
@@ -17,8 +17,8 @@ https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray
 `;
 
 let urls = [];
-let subConverter = "SUBAPI.cmliussss.net"; //在线订阅转换后端，目前使用CM的订阅转换功能。支持自建psub 可自行搭建https://github.com/bulianglin/psub
-let subConfig = "https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/config/ACL4SSR_Online_MultiCountry.ini"; //订阅配置文件
+let subConverter = "SUBAPI.cmliussss.net"; //订阅转换后端，可用环境变量 SUBAPI 覆盖
+let subConfig = "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_MultiMode.ini"; //分流模板，可用环境变量 SUBCONFIG 覆盖
 let subProtocol = 'https';
 
 export default {
@@ -92,18 +92,21 @@ export default {
 			urls = await ADD(订阅链接);
 			await sendMessage(`#获取订阅 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgentHeader}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
 
+			const fromConverter = userAgent.includes('subconverter') || userAgent.includes('cf-workers-sub');
+			const has = (name) => url.searchParams.has(name) && !fromConverter;
+			const hit = (re) => re.test(userAgent);
 			let 订阅格式 = 'base64';
-			if (userAgent.includes('null') || userAgent.includes('subconverter') || userAgent.includes('nekobox') || userAgent.includes(('CF-Workers-SUB').toLowerCase())) {
+			if (fromConverter || userAgent.includes('null')) {
 				订阅格式 = 'base64';
-			} else if (userAgent.includes('clash') || (url.searchParams.has('clash') && !userAgent.includes('subconverter'))) {
+			} else if (has('clash') || hit(/clash|mihomo|flclash|verge|stash/)) {
 				订阅格式 = 'clash';
-			} else if (userAgent.includes('sing-box') || userAgent.includes('singbox') || ((url.searchParams.has('sb') || url.searchParams.has('singbox')) && !userAgent.includes('subconverter'))) {
+			} else if (has('sb') || has('singbox') || hit(/sing-box|singbox|nekobox|nekoray/)) {
 				订阅格式 = 'singbox';
-			} else if (userAgent.includes('surge') || (url.searchParams.has('surge') && !userAgent.includes('subconverter'))) {
+			} else if (has('surge') || userAgent.includes('surge')) {
 				订阅格式 = 'surge';
-			} else if (userAgent.includes('quantumult%20x') || (url.searchParams.has('quanx') && !userAgent.includes('subconverter'))) {
+			} else if (has('quanx') || userAgent.includes('quantumult')) {
 				订阅格式 = 'quanx';
-			} else if (userAgent.includes('loon') || (url.searchParams.has('loon') && !userAgent.includes('subconverter'))) {
+			} else if (has('loon') || userAgent.includes('loon')) {
 				订阅格式 = 'loon';
 			}
 
@@ -189,20 +192,14 @@ export default {
 			}
 			//console.log(订阅转换URL);
 			try {
-				const subConverterResponse = await fetch(subConverterUrl);
+				const subConverterResponse = await fetch(subConverterUrl, { headers: { 'User-Agent': 订阅格式 == 'singbox' ? 'sing-box/1.12.0' : 'clash.meta/1.19.0' } });
 
 				if (!subConverterResponse.ok) {
-					return new Response(base64Data, {
-						headers: {
-							"content-type": "text/plain; charset=utf-8",
-							"Profile-Update-Interval": `${SUBUpdateTime}`,
-							//"Subscription-Userinfo": `upload=${UD}; download=${UD}; total=${total}; expire=${expire}`,
-						}
-					});
-					//throw new Error(`Error fetching subConverterUrl: ${subConverterResponse.status} ${subConverterResponse.statusText}`);
+					return new Response('订阅转换失败', { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } });
 				}
 				let subConverterContent = await subConverterResponse.text();
-				if (订阅格式 == 'clash') subConverterContent = await clashFix(subConverterContent);
+				if (订阅格式 == 'clash') subConverterContent = clashFix(subConverterContent);
+				else if (订阅格式 == 'singbox') subConverterContent = singboxFix(subConverterContent);
 				return new Response(subConverterContent, {
 					headers: {
 						"Content-Disposition": `attachment; filename*=utf-8''${encodeURIComponent(FileName)}`,
@@ -213,13 +210,7 @@ export default {
 					},
 				});
 			} catch (error) {
-				return new Response(base64Data, {
-					headers: {
-						"content-type": "text/plain; charset=utf-8",
-						"Profile-Update-Interval": `${SUBUpdateTime}`,
-						//"Subscription-Userinfo": `upload=${UD}; download=${UD}; total=${total}; expire=${expire}`,
-					}
-				});
+				return new Response('订阅转换失败', { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } });
 			}
 		}
 	}
@@ -307,6 +298,35 @@ async function MD5MD5(text) {
 	const secondHex = secondPassArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
 	return secondHex.toLowerCase();
+}
+
+
+function singboxFix(content) {
+	let cfg;
+	try {
+		cfg = JSON.parse(content);
+	} catch (e) {
+		return content;
+	}
+	const fixRule = (rule) => {
+		if (!rule || typeof rule !== 'object' || rule.action) return;
+		if (typeof rule.outbound === 'string' || rule.server) rule.action = 'route';
+		else if (Array.isArray(rule.outbound)) {
+			delete rule.outbound;
+			if (rule.server) rule.action = 'route';
+		}
+	};
+	if (cfg.dns && Array.isArray(cfg.dns.rules)) cfg.dns.rules.forEach(fixRule);
+	if (cfg.route && Array.isArray(cfg.route.rules)) cfg.route.rules.forEach(fixRule);
+	if (Array.isArray(cfg.inbounds)) {
+		for (const inbound of cfg.inbounds) {
+			if (inbound && inbound.inet4_address && !inbound.address) {
+				inbound.address = [inbound.inet4_address];
+				delete inbound.inet4_address;
+			}
+		}
+	}
+	return JSON.stringify(cfg);
 }
 
 function clashFix(content) {
@@ -435,7 +455,7 @@ async function getSUB(api, request, 追加UA, userAgentHeader) {
 					//console.log('Base64订阅: ' + response.apiUrl);
 					newapi += base64Decode(content) + '\n'; // 解码并追加内容
 				} else {
-					const 异常订阅LINK = `trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%E5%BC%82%E5%B8%B8%E8%AE%A2%E9%98%85%20${response.apiUrl.split('://')[1].split('/')[0]}`;
+					const 异常订阅LINK = `trojan://invalid@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%E5%BC%82%E5%B8%B8%E8%AE%A2%E9%98%85%20${response.apiUrl.split('://')[1].split('/')[0]}`;
 					console.log('异常订阅: ' + 异常订阅LINK);
 					异常订阅 += `${异常订阅LINK}\n`;
 				}
@@ -455,7 +475,7 @@ async function getSUB(api, request, 追加UA, userAgentHeader) {
 async function getUrl(request, targetUrl, 追加UA, userAgentHeader) {
 	// 设置自定义 User-Agent
 	const newHeaders = new Headers(request.headers);
-	newHeaders.set("User-Agent", `${atob('djJyYXlOLzYuNDU=')} cmliu/CF-Workers-SUB ${追加UA}(${userAgentHeader})`);
+	newHeaders.set("User-Agent", `v2rayN/6.45 ${追加UA}`);
 
 	// 构建新的请求对象
 	const modifiedRequest = new Request(targetUrl, {
@@ -655,7 +675,7 @@ async function KV(request, env, txt = 'ADD.txt', guest) {
 					<div class="editor-container">
 						${hasKV ? `
 						<textarea class="editor" 
-							placeholder="${decodeURIComponent(atob('TElOSyVFNyVBNCVCQSVFNCVCRSU4QiVFRiVCQyU4OCVFNCVCOCU4MCVFOCVBMSU4QyVFNCVCOCU4MCVFNCVCOCVBQSVFOCU4QSU4MiVFNyU4MiVCOSVFOSU5MyVCRSVFNiU4RSVBNSVFNSU4RCVCMyVFNSU4RiVBRiVFRiVCQyU4OSVFRiVCQyU5QQp2bGVzcyUzQSUyRiUyRjI0NmFhNzk1LTA2MzctNGY0Yy04ZjY0LTJjOGZiMjRjMWJhZCU0MDEyNy4wLjAuMSUzQTEyMzQlM0ZlbmNyeXB0aW9uJTNEbm9uZSUyNnNlY3VyaXR5JTNEdGxzJTI2c25pJTNEVEcuQ01MaXVzc3NzLmxvc2V5b3VyaXAuY29tJTI2YWxsb3dJbnNlY3VyZSUzRDElMjZ0eXBlJTNEd3MlMjZob3N0JTNEVEcuQ01MaXVzc3NzLmxvc2V5b3VyaXAuY29tJTI2cGF0aCUzRCUyNTJGJTI1M0ZlZCUyNTNEMjU2MCUyM0NGbmF0CnRyb2phbiUzQSUyRiUyRmFhNmRkZDJmLWQxY2YtNGE1Mi1iYTFiLTI2NDBjNDFhNzg1NiU0MDIxOC4xOTAuMjMwLjIwNyUzQTQxMjg4JTNGc2VjdXJpdHklM0R0bHMlMjZzbmklM0RoazEyLmJpbGliaWxpLmNvbSUyNmFsbG93SW5zZWN1cmUlM0QxJTI2dHlwZSUzRHRjcCUyNmhlYWRlclR5cGUlM0Rub25lJTIzSEsKc3MlM0ElMkYlMkZZMmhoWTJoaE1qQXRhV1YwWmkxd2IyeDVNVE13TlRveVJYUlFjVzQyU0ZscVZVNWpTRzlvVEdaVmNFWlJkMjVtYWtORFVUVnRhREZ0U21SRlRVTkNkV04xVjFvNVVERjFaR3RTUzBodVZuaDFielUxYXpGTFdIb3lSbTgyYW5KbmRERTRWelkyYjNCMGVURmxOR0p0TVdwNlprTm1RbUklMjUzRCU0MDg0LjE5LjMxLjYzJTNBNTA4NDElMjNERQoKCiVFOCVBRSVBMiVFOSU5OCU4NSVFOSU5MyVCRSVFNiU4RSVBNSVFNyVBNCVCQSVFNCVCRSU4QiVFRiVCQyU4OCVFNCVCOCU4MCVFOCVBMSU4QyVFNCVCOCU4MCVFNiU5RCVBMSVFOCVBRSVBMiVFOSU5OCU4NSVFOSU5MyVCRSVFNiU4RSVBNSVFNSU4RCVCMyVFNSU4RiVBRiVFRiVCQyU4OSVFRiVCQyU5QQpodHRwcyUzQSUyRiUyRnN1Yi54Zi5mcmVlLmhyJTJGYXV0bw=='))}"
+							placeholder="${decodeURIComponent(atob('JUU0JUI4JTgwJUU4JUExJThDJUU0JUI4JTgwJUU0JUI4JUFBJUU4JThBJTgyJUU3JTgyJUI5JUU2JTg4JTk2JUU4JUFFJUEyJUU5JTk4JTg1JUU5JTkzJUJFJUU2JThFJUE1JTBBdmxlc3MlM0EvLzAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMCU0MDEyNy4wLjAuMSUzQTQ0MyUzRmVuY3J5cHRpb24lM0Rub25lJTI2c2VjdXJpdHklM0R0bHMlMjZ0eXBlJTNEdGNwJTIzZXhhbXBsZSUwQWh0dHBzJTNBLy9leGFtcGxlLmNvbS9zdWI='))}"
 							id="content">${content}</textarea>
 						<div class="save-container">
 							<button class="save-btn" onclick="saveContent(this)">保存</button>
@@ -665,7 +685,7 @@ async function KV(request, env, txt = 'ADD.txt', guest) {
 					</div>
 					<br>
 					################################################################<br>
-					${decodeURIComponent(atob('dGVsZWdyYW0lMjAlRTQlQkElQTQlRTYlQjUlODElRTclQkUlQTQlMjAlRTYlOEElODAlRTYlOUMlQUYlRTUlQTQlQTclRTQlQkQlQUMlN0UlRTUlOUMlQTglRTclQkElQkYlRTUlOEYlOTElRTclODklOEMhJTNDYnIlM0UKJTNDYSUyMGhyZWYlM0QlMjdodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlMjclM0VodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlM0MlMkZhJTNFJTNDYnIlM0UKLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tJTNDYnIlM0UKZ2l0aHViJTIwJUU5JUExJUI5JUU3JTlCJUFFJUU1JTlDJUIwJUU1JTlEJTgwJTIwU3RhciFTdGFyIVN0YXIhISElM0NiciUzRQolM0NhJTIwaHJlZiUzRCUyN2h0dHBzJTNBJTJGJTJGZ2l0aHViLmNvbSUyRmNtbGl1JTJGQ0YtV29ya2Vycy1TVUIlMjclM0VodHRwcyUzQSUyRiUyRmdpdGh1Yi5jb20lMkZjbWxpdSUyRkNGLVdvcmtlcnMtU1VCJTNDJTJGYSUzRSUzQ2JyJTNFCi0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSUzQ2JyJTNFCiUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMw=='))}
+					作者: 那么羡慕你<br>
 					<br><br>UA: <strong>${request.headers.get('User-Agent')}</strong>
 					<script>
 					function copyToClipboard(text, qrcode) {
