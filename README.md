@@ -27,4 +27,6 @@
 
 默认后端是仍在更新的 `api.asailor.org`。转换时节点会经过该后端；不想经过别人的服务器，就把变量 `SUBAPI` 改成你自己部署的地址。
 
-默认后端已经能转换 VMess、VLESS Reality、Trojan、Shadowsocks、Hysteria2、TUIC、AnyTLS，以及 Clash 的 VLESS XHTTP。WireGuard 分享链接和 sing-box 不接收的 XHTTP 会在返回前补进配置。WireGuard 写成 `wireguard://私钥@主机:端口?publickey=公钥&address=10.0.0.2/32#名称`，私钥里的 `+`、`/`、`=` 要做 URL 编码。
+分流默认用官方 ACL4SSR 多国家模板，规则每天更新。分组包括港、日、美、新，以及媒体、电报、AI。Clash 会把节点直接写进配置。
+
+默认后端能转换 VMess、VLESS Reality、Trojan、Shadowsocks、Hysteria2、TUIC、AnyTLS，以及 Clash 的 VLESS XHTTP。WireGuard 分享链接和 sing-box 不接收的 XHTTP 会在返回前补进配置。WireGuard 写成 `wireguard://私钥@主机:端口?publickey=公钥&address=10.0.0.2/32#名称`，私钥里的 `+`、`/`、`=` 要做 URL 编码。
