@@ -17,7 +17,7 @@ https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray
 `;
 
 let urls = [];
-let subConverter = "SUBAPI.cmliussss.net"; //订阅转换后端，可用环境变量 SUBAPI 覆盖
+let subConverter = "api.asailor.org"; //订阅转换后端，可用环境变量 SUBAPI 覆盖
 let subConfig = "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_MultiMode.ini"; //分流模板，可用环境变量 SUBCONFIG 覆盖
 let subProtocol = 'https';
 
@@ -330,6 +330,9 @@ function singboxFix(content) {
 }
 
 function clashFix(content) {
+	for (const field of ['down', 'up', 'obfs', 'obfs-password', 'fingerprint']) {
+		content = content.replaceAll(`, ${field}: ""`, '').replaceAll(`, ${field}: ''`, '');
+	}
 	if (content.includes('wireguard') && !content.includes('remote-dns-resolve')) {
 		let lines;
 		if (content.includes('\r\n')) {
