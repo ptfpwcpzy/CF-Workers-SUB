@@ -195,11 +195,13 @@ export default {
 				const subConverterResponse = await fetch(subConverterUrl, { headers: { 'User-Agent': 订阅格式 == 'singbox' ? 'sing-box/1.12.0' : 'clash.meta/1.19.0' } });
 
 				if (!subConverterResponse.ok) {
+					const localOnly = localConfig(订阅格式, result);
+					if (localOnly) return new Response(localOnly, { headers: { "content-type": "text/plain; charset=utf-8", "Profile-Update-Interval": `${SUBUpdateTime}` } });
 					return new Response('订阅转换失败', { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } });
 				}
 				let subConverterContent = await subConverterResponse.text();
-				if (订阅格式 == 'clash') subConverterContent = clashFix(subConverterContent);
-				else if (订阅格式 == 'singbox') subConverterContent = singboxFix(subConverterContent);
+				if (订阅格式 == 'clash') subConverterContent = clashFix(subConverterContent, result);
+				else if (订阅格式 == 'singbox') subConverterContent = singboxFix(subConverterContent, result);
 				return new Response(subConverterContent, {
 					headers: {
 						"Content-Disposition": `attachment; filename*=utf-8''${encodeURIComponent(FileName)}`,
@@ -210,6 +212,8 @@ export default {
 					},
 				});
 			} catch (error) {
+				const localOnly = localConfig(订阅格式, result);
+				if (localOnly) return new Response(localOnly, { headers: { "content-type": "text/plain; charset=utf-8", "Profile-Update-Interval": `${SUBUpdateTime}` } });
 				return new Response('订阅转换失败', { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } });
 			}
 		}
@@ -301,7 +305,241 @@ async function MD5MD5(text) {
 }
 
 
-function singboxFix(content) {
+
+function queryMap(search) {
+	const out = {};
+	const q = search.startsWith('?') ? search.slice(1) : search;
+	if (!q) return out;
+	for (const part of q.split('&')) {
+		if (!part) continue;
+		const i = part.indexOf('=');
+		const k = decodeURIComponent(i < 0 ? part : part.slice(0, i)).toLowerCase();
+		const v = decodeURIComponent(i < 0 ? '' : part.slice(i + 1));
+		out[k] = v;
+	}
+	return out;
+}
+
+function linkName(hash, fallback) {
+	let name = '';
+	try { name = hash ? decodeURIComponent(hash) : ''; } catch (e) { name = hash || ''; }
+	name = name.trim();
+	return name || fallback;
+}
+
+function yamlScalar(value) {
+	const text = String(value);
+	if (text === '' || /[:{},&*#?|<>=!%@`"'\\\s\[\]]/.test(text)) {
+		return '"' + text.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+	}
+	return text;
+}
+
+function parseWireguardLink(line) {
+	const matched = String(line).trim().match(/^(?:wireguard|wg):\/\/([^@/?#]+)@([^:/?#]+):(\d+)(\?[^#]*)?(?:#(.*))?$/i);
+	if (!matched) return null;
+	let privateKey = '';
+	try { privateKey = decodeURIComponent(matched[1]); } catch (e) { privateKey = matched[1]; }
+	const server = matched[2];
+	const port = Number(matched[3]);
+	const q = queryMap(matched[4] || '');
+	if (!privateKey) privateKey = q.private_key || q.privatekey || q.secretkey || q.secret_key || '';
+	const publicKey = q.publickey || q.public_key || q.peer_public_key || q.peerpublickey || '';
+	if (!privateKey || !publicKey || !server || !port) return null;
+	let address = (q.address || q.ip || '10.0.0.2/32').split(',').map(item => item.trim()).filter(Boolean);
+	address = address.map(item => item.includes('/') ? item : item + '/32');
+	let reserved = null;
+	if (q.reserved) {
+		const parts = q.reserved.split(',').map(item => Number(item.trim())).filter(item => !Number.isNaN(item));
+		if (parts.length === 3) reserved = parts;
+	}
+	return {
+		name: linkName(matched[5] || '', 'wireguard'),
+		server,
+		port,
+		privateKey,
+		publicKey,
+		address,
+		mtu: Number(q.mtu || 1280) || 1280,
+		reserved,
+		psk: q.presharedkey || q.pre_shared_key || q.psk || ''
+	};
+}
+
+function parseXhttpLink(line) {
+	if (!/^vless:\/\//i.test(line)) return null;
+	let url;
+	try { url = new URL(line.trim()); } catch (e) { return null; }
+	const q = queryMap(url.search);
+	const type = (q.type || 'tcp').toLowerCase();
+	if (type !== 'xhttp' && type !== 'splithttp') return null;
+	const uuid = decodeURIComponent(url.username || '');
+	const server = url.hostname;
+	const port = Number(url.port || 443);
+	if (!uuid || !server || !port) return null;
+	const security = (q.security || 'none').toLowerCase();
+	const sni = q.sni || q.servername || q.host || server;
+	const host = q.host || '';
+	const path = q.path || '/';
+	const fp = q.fp || q.fingerprint || '';
+	const pbk = q.pbk || q.publickey || '';
+	const sid = q.sid || q.shortid || q.short_id || '';
+	const insecure = q.insecure === '1' || q.allowinsecure === '1';
+	const name = linkName(url.hash ? url.hash.slice(1) : '', 'xhttp');
+	const tlsOn = security === 'tls' || security === 'reality';
+	const outbound = {
+		type: 'vless',
+		tag: name,
+		server,
+		server_port: port,
+		uuid,
+		tls: { enabled: tlsOn, server_name: sni, insecure }
+	};
+	if (fp) outbound.tls.utls = { enabled: true, fingerprint: fp };
+	if (security === 'reality' && pbk) outbound.tls.reality = { enabled: true, public_key: pbk, short_id: sid };
+	if (q.flow) outbound.flow = q.flow;
+	const transport = { type: 'xhttp', path: path || '/' };
+	if (host) transport.host = host;
+	if (q.mode) transport.mode = q.mode;
+	outbound.transport = transport;
+	const opts = [`path: ${yamlScalar(path || '/')}`];
+	if (host) opts.push(`host: ${yamlScalar(host)}`);
+	if (q.mode) opts.push(`mode: ${yamlScalar(q.mode)}`);
+	const clash = [
+		`name: ${yamlScalar(name)}`,
+		`server: ${yamlScalar(server)}`,
+		`port: ${port}`,
+		`type: vless`,
+		`uuid: ${yamlScalar(uuid)}`,
+		`udp: true`,
+		`tls: ${tlsOn}`,
+		`network: xhttp`,
+		`encryption: none`,
+		`servername: ${yamlScalar(sni)}`,
+		`skip-cert-verify: ${insecure}`,
+		`xhttp-opts: {${opts.join(', ')}}`
+	];
+	if (fp) clash.push(`client-fingerprint: ${yamlScalar(fp)}`);
+	if (security === 'reality' && pbk) clash.push(`reality-opts: {public-key: ${yamlScalar(pbk)}, short-id: ${yamlScalar(sid)}}`);
+	if (q.flow) clash.push(`flow: ${yamlScalar(q.flow)}`);
+	return { singbox: outbound, clash: `{${clash.join(', ')}}`, name, uuid };
+}
+
+function collectExtra(raw) {
+	const wg = [];
+	const xhttp = [];
+	for (const line of String(raw || '').split('\n')) {
+		const text = line.trim();
+		if (!text) continue;
+		const wireguard = parseWireguardLink(text);
+		if (wireguard) {
+			wg.push(wireguard);
+			continue;
+		}
+		const xhttpNode = parseXhttpLink(text);
+		if (xhttpNode) xhttp.push(xhttpNode);
+	}
+	return { wg, xhttp };
+}
+
+function onlyLocalNodes(raw) {
+	const lines = String(raw || '').split('\n').map(line => line.trim()).filter(Boolean);
+	return lines.length > 0 && lines.every(line => parseWireguardLink(line) || parseXhttpLink(line));
+}
+
+function wgEndpoint(node) {
+	const peer = {
+		address: node.server,
+		port: node.port,
+		public_key: node.publicKey,
+		allowed_ips: ['0.0.0.0/0', '::/0']
+	};
+	if (node.reserved) peer.reserved = node.reserved;
+	if (node.psk) peer.pre_shared_key = node.psk;
+	return {
+		type: 'wireguard',
+		tag: node.name,
+		private_key: node.privateKey,
+		address: node.address,
+		mtu: node.mtu,
+		peers: [peer]
+	};
+}
+
+function wgClash(node) {
+	const ip = (node.address[0] || '10.0.0.2/32').split('/')[0];
+	const parts = [
+		`name: ${yamlScalar(node.name)}`,
+		`server: ${yamlScalar(node.server)}`,
+		`port: ${node.port}`,
+		`ip: ${ip}`,
+		`private-key: ${yamlScalar(node.privateKey)}`,
+		`public-key: ${yamlScalar(node.publicKey)}`,
+		`udp: true`,
+		`mtu: ${node.mtu}`,
+		`remote-dns-resolve: true`,
+		`type: wireguard`
+	];
+	if (node.psk) parts.push(`preshared-key: ${yamlScalar(node.psk)}`);
+	if (node.reserved) parts.push(`reserved: [${node.reserved.join(', ')}]`);
+	return `{${parts.join(', ')}}`;
+}
+
+function addClashGroupNames(content, names) {
+	if (!names.length || !content.includes('proxy-groups:')) return content;
+	const lines = content.split('\n');
+	const out = [];
+	let inGroups = false;
+	let groupType = '';
+	let didSelect = false;
+	let didUrltest = false;
+	for (const line of lines) {
+		if (line.startsWith('proxy-groups:')) inGroups = true;
+		else if (inGroups && line && !/^\s/.test(line)) inGroups = false;
+		out.push(line);
+		if (!inGroups) continue;
+		const typeMatch = line.match(/^\s+type:\s*(\S+)/);
+		if (typeMatch) groupType = typeMatch[1];
+		const want = (groupType === 'select' && !didSelect) || (groupType === 'url-test' && !didUrltest);
+		if (want && /^\s+proxies:\s*$/.test(line)) {
+			const indent = (line.match(/^\s*/)[0] || '') + '  ';
+			for (const name of names) out.push(`${indent}- ${yamlScalar(name)}`);
+			if (groupType === 'select') didSelect = true;
+			if (groupType === 'url-test') didUrltest = true;
+		}
+	}
+	return out.join('\n');
+}
+
+function localConfig(format, raw) {
+	if (!onlyLocalNodes(raw)) return '';
+	const extra = collectExtra(raw);
+	if (format === 'clash') {
+		const lines = [
+			...extra.xhttp.map(item => '  - ' + item.clash),
+			...extra.wg.map(item => '  - ' + wgClash(item))
+		];
+		const names = [...extra.xhttp.map(item => item.name), ...extra.wg.map(item => item.name)];
+		let content = `proxies:\n${lines.join('\n')}\nproxy-groups:\n  - name: 节点选择\n    type: select\n    proxies:\n`;
+		return addClashGroupNames(content, names);
+	}
+	if (format === 'singbox') {
+		const cfg = {
+			log: { level: 'info' },
+			inbounds: [{ type: 'mixed', tag: 'mixed-in', listen: '127.0.0.1', listen_port: 2080 }],
+			outbounds: extra.xhttp.map(item => item.singbox),
+			endpoints: extra.wg.map(wgEndpoint),
+			route: { final: '节点选择' }
+		};
+		const tags = [...extra.xhttp.map(item => item.name), ...extra.wg.map(item => item.name)];
+		cfg.outbounds.push({ type: 'selector', tag: '节点选择', outbounds: tags });
+		cfg.outbounds.push({ type: 'direct', tag: 'direct' });
+		return JSON.stringify(cfg);
+	}
+	return '';
+}
+
+function singboxFix(content, raw) {
 	let cfg;
 	try {
 		cfg = JSON.parse(content);
@@ -326,10 +564,42 @@ function singboxFix(content) {
 			}
 		}
 	}
+	const extra = collectExtra(raw);
+	if (!Array.isArray(cfg.outbounds)) cfg.outbounds = [];
+	if (!Array.isArray(cfg.endpoints)) cfg.endpoints = [];
+	const tags = new Set();
+	for (const item of cfg.outbounds) if (item && item.tag) tags.add(item.tag);
+	for (const item of cfg.endpoints) if (item && item.tag) tags.add(item.tag);
+	const proxyTags = [];
+	const endpointTags = [];
+	for (const item of extra.xhttp) {
+		if (tags.has(item.name)) continue;
+		tags.add(item.name);
+		cfg.outbounds.push(item.singbox);
+		proxyTags.push(item.name);
+	}
+	for (const item of extra.wg) {
+		if (tags.has(item.name)) continue;
+		tags.add(item.name);
+		cfg.endpoints.push(wgEndpoint(item));
+		endpointTags.push(item.name);
+	}
+	let didSelect = false;
+	let didUrltest = false;
+	for (const outbound of cfg.outbounds) {
+		if (!outbound || !Array.isArray(outbound.outbounds)) continue;
+		if (outbound.type === 'selector' && !didSelect) {
+			outbound.outbounds = [...proxyTags, ...endpointTags, ...outbound.outbounds];
+			didSelect = true;
+		} else if (outbound.type === 'urltest' && !didUrltest) {
+			outbound.outbounds = [...proxyTags, ...outbound.outbounds];
+			didUrltest = true;
+		}
+	}
 	return JSON.stringify(cfg);
 }
 
-function clashFix(content) {
+function clashFix(content, raw) {
 	for (const field of ['down', 'up', 'obfs', 'obfs-password', 'fingerprint']) {
 		content = content.replaceAll(`, ${field}: ""`, '').replaceAll(`, ${field}: ''`, '');
 	}
@@ -353,6 +623,14 @@ function clashFix(content) {
 		}
 
 		content = result;
+	}
+	const extra = collectExtra(raw);
+	const fresh = extra.wg.filter(item => !content.includes(item.privateKey));
+	if (fresh.length) {
+		const block = fresh.map(item => '  - ' + wgClash(item)).join('\n');
+		if (content.includes('\nproxy-groups:')) content = content.replace('\nproxy-groups:', '\n' + block + '\nproxy-groups:');
+		else content += '\nproxies:\n' + block + '\n';
+		content = addClashGroupNames(content, fresh.map(item => item.name));
 	}
 	return content;
 }
